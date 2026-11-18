@@ -23,9 +23,9 @@
 - [x] **Import Physical Wall Stickies** camera input triggering `qwen3.5:35b-a3b` (`think=True`) vision extraction.
 
 ### Phase 5: Result Map Export Compiler & macOS `.app` / `.dmg` Bundle
-- [x] `PROCESS_SPEC.md` report compiler (Executive Summary, Red/Blue friction table, `+5 CRUD` data dictionary) + `.flowpulse.json` export.
-- [x] LAN/Tailscale QR-code mobile pairing modal.
-- [ ] Freeze arm64 sidecar via `scripts/build_sidecar.py` and package standalone `FlowPulse.app` / `FlowPulse.dmg` via Tauri v2.
+- [x] Result Map vector poster `.svg` export + `PROCESS_SPEC.md` report compiler (Executive Summary, Red/Blue friction table, `+5 CRUD` data dictionary) + `.flowpulse.json` export.
+- [x] LAN/Tailscale QR-code mobile pairing modal + iOS/macOS PWA manifest icons (`public/`).
+- [x] Tauri v2 macOS (`aarch64-apple-darwin`) Rust shell (`Cargo.toml`, sidecar lifecycle manager in `src/lib.rs`, `.icns` bundle icons, and `scripts/build_sidecar.py`).
 
 ---
 

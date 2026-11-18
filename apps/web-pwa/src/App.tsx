@@ -7,7 +7,7 @@ import { StickyWorkshopNode } from "./components/nodes/StickyWorkshopNode";
 import { ResultMapNode } from "./components/nodes/ResultMapNode";
 import { CrudStepEdge } from "./components/edges/CrudStepEdge";
 import { FacilitatorSidebar } from "./components/FacilitatorSidebar";
-import { compileProcessSpecMarkdown, triggerTextDownload } from "./engine/exporter";
+import { compileProcessSpecMarkdown, compileResultMapSvg, triggerTextDownload } from "./engine/exporter";
 import { CrudOperation, FlowNodeKind } from "./types/flow";
 
 const nodeTypes = { "sticky-workshop": StickyWorkshopNode, "result-map": ResultMapNode };
@@ -69,9 +69,11 @@ export function App() {
   };
 
   const handleExportDeliverables = () => {
+    const slug = projectTitle.toLowerCase().replace(/\s+/g, "_");
     triggerTextDownload("PROCESS_SPEC.md", compileProcessSpecMarkdown(projectTitle, sections, nodes, edges), "text/markdown");
+    triggerTextDownload(`${slug}_result_map.svg`, compileResultMapSvg(projectTitle, sections, nodes, edges), "image/svg+xml");
     triggerTextDownload(
-      `${projectTitle.toLowerCase().replace(/\s+/g, "_")}.flowpulse.json`,
+      `${slug}.flowpulse.json`,
       JSON.stringify({ projectTitle, exportedAt: new Date().toISOString(), sections, nodes, edges }, null, 2),
       "application/json"
     );

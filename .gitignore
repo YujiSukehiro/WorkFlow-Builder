@@ -11,6 +11,7 @@ __pycache__/
 *.db-wal
 *.db-shm
 target/
+apps/desktop-shell/src-tauri/gen/
 *.pem
 .env
 .env.*
