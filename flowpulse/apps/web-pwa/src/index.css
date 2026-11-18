@@ -1,0 +1,15 @@
+@import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
+
+@keyframes draftPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 2px rgba(45, 212, 191, 0.7), 0 0 14px rgba(45, 212, 191, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(45, 212, 191, 0.95), 0 0 24px rgba(45, 212, 191, 0.6);
+  }
+}
+
+.ai-draft-glow {
+  animation: draftPulse 2s infinite ease-in-out;
+}

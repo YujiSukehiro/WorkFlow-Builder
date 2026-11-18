@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "FlowPulse",
+  "version": "0.1.0",
+  "identifier": "local.flowpulse.studio",
+  "build": {
+    "beforeDevCommand": "npm --prefix ../web-pwa run dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm --prefix ../web-pwa run build",
+    "frontendDist": "../../web-pwa/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "FlowPulse — Local AI Collaborative Result Map Studio",
+        "width": 1440,
+        "height": 900,
+        "resizable": true
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "externalBin": ["binaries/flowpulse-host-engine"]
+  }
+}

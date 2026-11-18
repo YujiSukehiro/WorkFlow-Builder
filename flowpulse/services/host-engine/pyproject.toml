@@ -1,0 +1,39 @@
+[project]
+name = "flowpulse-host-engine"
+version = "0.1.0"
+description = "Local GPU voice, VLM, and deterministic Result Map engine"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.115.8",
+    "uvicorn[standard]>=0.34.0",
+    "websockets>=14.2",
+    "pipecat-ai[silero,webrtc,ollama]>=0.0.102",
+    "aiortc>=1.9.0",
+    "mlx>=0.22.0",
+    "parakeet-mlx",
+    "mlx-audio",
+    "misaki[en]",
+    "huggingface-hub>=0.27.0",
+    "soundfile>=0.13.1",
+    "numpy>=2.1.0",
+    "ollama>=0.4.7",
+    "pycrdt>=0.10.9",
+    "pycrdt-websocket>=0.15.3",
+    "sqlmodel>=0.0.22",
+    "aiosqlite>=0.21.0",
+    "pydantic>=2.10.6",
+    "pillow>=11.1.0",
+    "jinja2>=3.1.5"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.4",
+    "pytest-asyncio>=0.25.3",
+    "ruff>=0.9.6",
+    "pyinstaller>=6.12.0"
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+asyncio_default_fixture_loop_scope = "function"
