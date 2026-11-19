@@ -12,39 +12,81 @@ const CRUD_COLORS: Record<CrudOperation, string> = {
 };
 
 export const CrudStepEdge: React.FC<EdgeProps> = ({
-  id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, selected, markerEnd,
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  data,
+  selected,
+  markerEnd,
 }) => {
   const insertStepBetween = useFlowStore((s) => s.insertStepBetween);
+  const selectEdge = useFlowStore((s) => s.selectEdge);
   const runAutoLayout = useFlowStore((s) => s.runAutoLayout);
   const flowEdge = (data as { flowEdge?: FlowEdge })?.flowEdge;
 
   const [edgePath, labelX, labelY] = getSmoothStepPath({
-    sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition, borderRadius: 0,
+    sourceX,
+    sourceY,
+    sourcePosition,
+    targetX,
+    targetY,
+    targetPosition,
+    borderRadius: 0,
   });
 
   if (!flowEdge) return <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} />;
 
-  const handleMidInsert = async (e: React.MouseEvent) => {
+  const handleQuickMidInsert = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    const label = window.prompt("Insert missed step (2-4 words):", "Missed Check");
-    if (!label) return;
-    insertStepBetween({ edgeId: flowEdge.id, label, crudIn: "R", crudOut: flowEdge.crud, origin: "human" });
-    await runAutoLayout(true);
+    const mid = insertStepBetween({
+      edgeId: flowEdge.id,
+      label: "Missed Check",
+      crudIn: "R",
+      crudOut: flowEdge.crud,
+      origin: "human",
+    });
+    if (mid) {
+      await runAutoLayout(true);
+      useFlowStore.getState().selectNode(mid.id);
+    }
   };
 
   return (
     <>
-      <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={{ strokeWidth: selected ? 3 : 2, stroke: selected ? "#38bdf8" : "#94a3b8" }} />
+      <BaseEdge
+        id={id}
+        path={edgePath}
+        markerEnd={markerEnd}
+        style={{ strokeWidth: selected ? 3 : 2, stroke: selected ? "#38bdf8" : "#94a3b8" }}
+      />
       <EdgeLabelRenderer>
         <div
-          style={{ position: "absolute", transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`, pointerEvents: "all" }}
-          className="nodrag nopan flex flex-col items-center gap-0.5 group"
+          onClick={(e) => {
+            e.stopPropagation();
+            selectEdge(flowEdge.id);
+          }}
+          style={{
+            position: "absolute",
+            transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
+            pointerEvents: "all",
+          }}
+          className="nodrag nopan flex flex-col items-center gap-0.5 group cursor-pointer"
         >
-          <div className="flex items-center gap-1 rounded-full bg-slate-900/95 border border-slate-700 px-2 py-0.5 text-[11px] font-mono font-bold text-slate-100 shadow-md">
+          <div
+            className={`flex items-center gap-1 rounded-full bg-slate-900/95 border px-2 py-0.5 text-[11px] font-mono font-bold text-slate-100 shadow-md ${
+              selected ? "border-sky-400 ring-2 ring-sky-400/40" : "border-slate-700"
+            }`}
+          >
             <span>{flowEdge.stepNumber}</span>
-            <span className={`rounded px-1 text-[10px] border ${CRUD_COLORS[flowEdge.crud]}`}>{flowEdge.crud}</span>
+            <span className={`rounded px-1 text-[10px] border ${CRUD_COLORS[flowEdge.crud]}`}>
+              {flowEdge.crud}
+            </span>
             <button
-              onClick={handleMidInsert}
+              onClick={handleQuickMidInsert}
               title="Slot missed step (+5 gap rule)"
               className="ml-0.5 hidden group-hover:inline-flex items-center justify-center rounded-full bg-slate-700 hover:bg-teal-500 hover:text-slate-950 w-4 h-4 transition"
             >

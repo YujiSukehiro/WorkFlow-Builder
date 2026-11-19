@@ -15,3 +15,5 @@ apps/desktop-shell/src-tauri/gen/
 *.pem
 .env
 .env.*
+flowpulse-phase6-7-dropin.zip
+flowpulse_m5_handoff.json

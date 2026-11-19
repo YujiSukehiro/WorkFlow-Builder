@@ -9,6 +9,9 @@ import {
   FlowNode,
   FlowNodeKind,
   FlowSection,
+  ProjectBundle,
+  ProjectSummary,
+  WorkshopPhase,
 } from "../types/flow";
 import {
   allocateInsertedStepNumbers,
@@ -34,6 +37,7 @@ interface FlowStoreState {
   projectId: string;
   projectTitle: string;
   visualMode: CanvasVisualMode;
+  activePhase: WorkshopPhase;
   sections: FlowSection[];
   nodes: FlowNode[];
   edges: FlowEdge[];
@@ -44,14 +48,23 @@ interface FlowStoreState {
   canUndoAi: boolean;
   chatHistory: ChatTurn[];
   isAiThinking: boolean;
+  savedProjects: ProjectSummary[];
 
-  initProject: (projectId?: string) => void;
+  initProject: (projectId?: string, forceReload?: boolean) => Promise<void>;
+  refreshSavedProjects: () => Promise<void>;
+  createNewProject: (title: string) => Promise<void>;
+  importProjectBundle: (bundle: ProjectBundle) => Promise<void>;
+  deleteSavedProject: (projectId: string) => Promise<void>;
+
   setProjectTitle: (title: string) => void;
   setVisualMode: (mode: CanvasVisualMode) => void;
+  setActivePhase: (phase: WorkshopPhase) => void;
   selectNode: (nodeId: string | null) => void;
   selectEdge: (edgeId: string | null) => void;
 
-  upsertSection: (prefix: number, name: string, origin?: ActorOrigin) => FlowSection;
+  upsertSection: (prefix: number, name: string, colorHex?: string, origin?: ActorOrigin) => FlowSection;
+  deleteSection: (prefix: number, origin?: ActorOrigin) => void;
+
   addWorkflowStep: (params: {
     fromNodeId: string;
     sectionPrefix: number;
@@ -76,7 +89,13 @@ interface FlowStoreState {
     condition?: string;
     origin?: ActorOrigin;
   }) => FlowEdge | null;
+
   updateNodeLabel: (nodeId: string, label: string, origin?: ActorOrigin) => void;
+  updateNodeDetails: (
+    nodeId: string,
+    patch: Partial<Pick<FlowNode, "label" | "notes" | "kind" | "sectionPrefix" | "positionPinnedByUser">>,
+    origin?: ActorOrigin
+  ) => void;
   compressNodeLabel: (nodeId: string) => void;
   setFrictionSticky: (params: {
     nodeId: string;
@@ -88,8 +107,16 @@ interface FlowStoreState {
   }) => void;
   updateNodePosition: (nodeId: string, pos: { x: number; y: number }, pinned?: boolean) => void;
   confirmAiDraft: (nodeId: string) => void;
+  confirmAllAiDrafts: () => void;
   rejectAiDraft: (nodeId: string) => void;
   deleteNode: (nodeId: string, origin?: ActorOrigin) => void;
+
+  updateEdgeDetails: (
+    edgeId: string,
+    patch: Partial<Pick<FlowEdge, "crud" | "condition" | "sectionPrefix" | "stepNumber">>,
+    origin?: ActorOrigin
+  ) => void;
+  deleteEdge: (edgeId: string, origin?: ActorOrigin) => void;
 
   runAutoLayout: (respectPinned?: boolean) => Promise<void>;
   normalizeAllPlusFives: () => void;
@@ -109,12 +136,56 @@ let yEdges: Y.Map<FlowEdge> | null = null;
 let humanUndoManager: Y.UndoManager | null = null;
 let aiUndoManager: Y.UndoManager | null = null;
 let wsProvider: WebsocketProvider | null = null;
+let idbProvider: IndexeddbPersistence | null = null;
+let persistTimer: number | null = null;
 
 function uid(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function slugifyProjectId(title: string): string {
+  const base = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 32);
+  return `${base || "workshop"}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
+const DEFAULT_WELCOME_TURN: ChatTurn = {
+  id: "welcome",
+  speaker: "ai",
+  transcript:
+    "Ready on the board! Walk me through what triggers this workflow—or click a sticky to branch out.",
+  mutatedIds: [],
+  timestamp: new Date().toISOString(),
+};
+
 export const useFlowStore = create<FlowStoreState>((set, get) => {
+  const scheduleHostSave = () => {
+    if (persistTimer !== null) window.clearTimeout(persistTimer);
+    persistTimer = window.setTimeout(async () => {
+      const s = get();
+      if (s.nodes.length === 0 && s.sections.length === 0) return;
+      try {
+        await fetch(`/api/projects/${encodeURIComponent(s.projectId)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: s.projectTitle,
+            visual_mode: s.visualMode,
+            active_phase: s.activePhase,
+            sections: s.sections,
+            nodes: s.nodes,
+            edges: s.edges,
+          }),
+        });
+      } catch {
+        // Offline mode: IndexedDB already persists Yjs state locally
+      }
+    }, 650);
+  };
+
   const syncFromYDoc = () => {
     if (!ySections || !yNodes || !yEdges) return;
     set({
@@ -124,12 +195,42 @@ export const useFlowStore = create<FlowStoreState>((set, get) => {
       canUndoHuman: (humanUndoManager?.undoStack.length ?? 0) > 0,
       canUndoAi: (aiUndoManager?.undoStack.length ?? 0) > 0,
     });
+    scheduleHostSave();
+  };
+
+  const teardownActiveProviders = () => {
+    if (persistTimer !== null) {
+      window.clearTimeout(persistTimer);
+      persistTimer = null;
+    }
+    try {
+      wsProvider?.destroy();
+    } catch {
+      // ignore
+    }
+    wsProvider = null;
+    try {
+      idbProvider?.destroy();
+    } catch {
+      // ignore
+    }
+    idbProvider = null;
+    humanUndoManager?.destroy();
+    humanUndoManager = null;
+    aiUndoManager?.destroy();
+    aiUndoManager = null;
+    ydoc?.destroy();
+    ydoc = null;
+    ySections = null;
+    yNodes = null;
+    yEdges = null;
   };
 
   return {
     projectId: "default-workshop",
     projectTitle: "Purchase Requisition & Approval",
     visualMode: "sticky-workshop",
+    activePhase: 2,
     sections: [],
     nodes: [],
     edges: [],
@@ -138,20 +239,27 @@ export const useFlowStore = create<FlowStoreState>((set, get) => {
     wsConnected: false,
     canUndoHuman: false,
     canUndoAi: false,
-    chatHistory: [
-      {
-        id: "welcome",
-        speaker: "ai",
-        transcript:
-          "Ready on the board! Walk me through what triggers this workflow—or click a sticky to branch out.",
-        mutatedIds: [],
-        timestamp: new Date().toISOString(),
-      },
-    ],
+    chatHistory: [DEFAULT_WELCOME_TURN],
     isAiThinking: false,
+    savedProjects: [],
 
-    initProject: (projectId = "default-workshop") => {
-      if (ydoc) return;
+    refreshSavedProjects: async () => {
+      try {
+        const res = await fetch("/api/projects");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (Array.isArray(data.projects)) {
+          set({ savedProjects: data.projects as ProjectSummary[] });
+        }
+      } catch {
+        // Offline fallback
+      }
+    },
+
+    initProject: async (projectId = "default-workshop", forceReload = false) => {
+      if (ydoc && get().projectId === projectId && !forceReload) return;
+      teardownActiveProviders();
+
       ydoc = new Y.Doc();
       ySections = ydoc.getMap<FlowSection>("sections");
       yNodes = ydoc.getMap<FlowNode>("nodes");
@@ -170,10 +278,60 @@ export const useFlowStore = create<FlowStoreState>((set, get) => {
       aiUndoManager.on("stack-item-popped", syncFromYDoc);
       ydoc.on("update", syncFromYDoc);
 
-      const idb = new IndexeddbPersistence(`flowpulse-${projectId}`, ydoc);
-      idb.once("synced", () => {
-        if (yNodes && yNodes.size === 0) {
-          get().loadSampleStarterBoard();
+      set({
+        projectId,
+        selectedNodeId: null,
+        selectedEdgeId: null,
+        wsConnected: false,
+        chatHistory: [DEFAULT_WELCOME_TURN],
+      });
+
+      let remoteProject: Record<string, unknown> | null = null;
+      try {
+        const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}`);
+        if (res.ok) {
+          remoteProject = (await res.json()) as Record<string, unknown>;
+          const remoteTurns = Array.isArray(remoteProject.chatHistory)
+            ? (remoteProject.chatHistory as ChatTurn[])
+            : [];
+          const phaseNum = Number(remoteProject.activePhase ?? 2);
+          const validPhase: WorkshopPhase =
+            phaseNum === 1 || phaseNum === 2 || phaseNum === 3 || phaseNum === 4 ? phaseNum : 2;
+          set({
+            projectTitle: String(remoteProject.title || "Untitled Process"),
+            visualMode: remoteProject.visualMode === "result-map" ? "result-map" : "sticky-workshop",
+            activePhase: validPhase,
+            chatHistory: remoteTurns.length > 0 ? remoteTurns : [DEFAULT_WELCOME_TURN],
+          });
+        }
+      } catch {
+        // Host engine offline; IndexedDB will hydrate local Yjs state
+      }
+
+      idbProvider = new IndexeddbPersistence(`flowpulse-${projectId}`, ydoc);
+      idbProvider.once("synced", () => {
+        if (!ydoc || !ySections || !yNodes || !yEdges) return;
+        if (yNodes.size === 0) {
+          const remoteNodes = Array.isArray(remoteProject?.nodes)
+            ? (remoteProject!.nodes as FlowNode[])
+            : [];
+          const remoteSections = Array.isArray(remoteProject?.sections)
+            ? (remoteProject!.sections as FlowSection[])
+            : [];
+          const remoteEdges = Array.isArray(remoteProject?.edges)
+            ? (remoteProject!.edges as FlowEdge[])
+            : [];
+
+          if (remoteNodes.length > 0) {
+            ydoc.transact(() => {
+              remoteSections.forEach((s) => ySections!.set(s.id, s));
+              remoteNodes.forEach((n) => yNodes!.set(n.id, n));
+              remoteEdges.forEach((e) => yEdges!.set(e.id, e));
+            }, "human");
+            syncFromYDoc();
+          } else if (projectId === "default-workshop") {
+            get().loadSampleStarterBoard();
+          }
         } else {
           syncFromYDoc();
         }
@@ -189,30 +347,146 @@ export const useFlowStore = create<FlowStoreState>((set, get) => {
       } catch {
         set({ wsConnected: false });
       }
-      set({ projectId });
+
+      await get().refreshSavedProjects();
     },
 
-    setProjectTitle: (title) => set({ projectTitle: title }),
-    setVisualMode: (mode) => set({ visualMode: mode }),
+    createNewProject: async (title) => {
+      const cleanTitle = title.trim() || "New Workflow Map";
+      const newId = slugifyProjectId(cleanTitle);
+      teardownActiveProviders();
+      set({
+        projectId: newId,
+        projectTitle: cleanTitle,
+        visualMode: "sticky-workshop",
+        activePhase: 1,
+        sections: [],
+        nodes: [],
+        edges: [],
+        selectedNodeId: null,
+        selectedEdgeId: null,
+        chatHistory: [DEFAULT_WELCOME_TURN],
+      });
+      await get().initProject(newId, true);
+      if (ydoc && ySections && yNodes) {
+        ydoc.transact(() => {
+          ySections!.set("sec_0", {
+            id: "sec_0",
+            prefix: 0,
+            name: "Trigger",
+            stickyColorHex: "#86efac",
+            sortOrder: 0,
+          });
+          ySections!.set("sec_100", {
+            id: "sec_100",
+            prefix: 100,
+            name: "Intake",
+            stickyColorHex: "#fde047",
+            sortOrder: 100,
+          });
+          yNodes!.set("n_trig", {
+            id: "n_trig",
+            sectionPrefix: 0,
+            label: "Need Established",
+            notes: "Initial workflow trigger",
+            kind: "trigger",
+            isSlow: false,
+            slowNote: "",
+            hasProblem: false,
+            problemNote: "",
+            position: { x: 80, y: 200 },
+            positionPinnedByUser: false,
+            createdBy: "human",
+            aiStatus: "confirmed",
+          });
+        }, "human");
+        syncFromYDoc();
+      }
+      await get().refreshSavedProjects();
+    },
+
+    importProjectBundle: async (bundle) => {
+      const targetId = bundle.projectId || slugifyProjectId(bundle.projectTitle);
+      teardownActiveProviders();
+      set({
+        projectId: targetId,
+        projectTitle: bundle.projectTitle,
+        visualMode: bundle.visualMode ?? "sticky-workshop",
+        activePhase: bundle.activePhase ?? 2,
+      });
+      await get().initProject(targetId, true);
+      if (!ydoc || !ySections || !yNodes || !yEdges) return;
+      ydoc.transact(() => {
+        ySections!.clear();
+        yNodes!.clear();
+        yEdges!.clear();
+        bundle.sections.forEach((s) => ySections!.set(s.id, s));
+        bundle.nodes.forEach((n) => yNodes!.set(n.id, n));
+        bundle.edges.forEach((e) => yEdges!.set(e.id, e));
+      }, "human");
+      syncFromYDoc();
+      await get().refreshSavedProjects();
+    },
+
+    deleteSavedProject: async (targetId) => {
+      try {
+        await fetch(`/api/projects/${encodeURIComponent(targetId)}`, { method: "DELETE" });
+      } catch {
+        // ignore offline
+      }
+      await get().refreshSavedProjects();
+      if (get().projectId === targetId) {
+        await get().initProject("default-workshop", true);
+      }
+    },
+
+    setProjectTitle: (title) => {
+      set({ projectTitle: title });
+      scheduleHostSave();
+    },
+
+    setVisualMode: (mode) => {
+      set({ visualMode: mode });
+      scheduleHostSave();
+    },
+
+    setActivePhase: (phase) => {
+      set({ activePhase: phase });
+      scheduleHostSave();
+    },
+
     selectNode: (nodeId) => set({ selectedNodeId: nodeId, selectedEdgeId: null }),
     selectEdge: (edgeId) => set({ selectedEdgeId: edgeId, selectedNodeId: null }),
 
-    upsertSection: (prefix, name, origin = "human") => {
+    upsertSection: (prefix, name, colorHex, origin = "human") => {
       if (!ydoc || !ySections) throw new Error("YDoc not initialized");
       const existing = Array.from(ySections.values()).find((s) => s.prefix === prefix);
       const section: FlowSection = existing
-        ? { ...existing, name }
+        ? {
+            ...existing,
+            name,
+            stickyColorHex: colorHex ?? existing.stickyColorHex,
+          }
         : {
             id: `sec_${prefix}`,
             prefix,
             name,
-            stickyColorHex: getStickyColorForPrefix(prefix),
+            stickyColorHex: colorHex ?? getStickyColorForPrefix(prefix),
             sortOrder: prefix,
           };
       ydoc.transact(() => {
         ySections!.set(section.id, section);
       }, origin);
       return section;
+    },
+
+    deleteSection: (prefix, origin = "human") => {
+      if (!ydoc || !ySections || prefix === 0) return;
+      const target = Array.from(ySections.values()).find((s) => s.prefix === prefix);
+      if (!target) return;
+      ydoc.transact(() => {
+        ySections!.delete(target.id);
+      }, origin);
     },
 
     addWorkflowStep: ({
@@ -227,7 +501,7 @@ export const useFlowStore = create<FlowStoreState>((set, get) => {
     }) => {
       if (!ydoc || !yNodes || !yEdges || !ySections) throw new Error("YDoc not initialized");
       const hasSec = Array.from(ySections.values()).some((s) => s.prefix === sectionPrefix);
-      if (!hasSec) get().upsertSection(sectionPrefix, `Section ${sectionPrefix}`, origin);
+      if (!hasSec) get().upsertSection(sectionPrefix, `Section ${sectionPrefix}`, undefined, origin);
 
       const { cleaned } = validateConciseLabel(label);
       const sourceNode = yNodes.get(fromNodeId);
@@ -343,13 +617,15 @@ export const useFlowStore = create<FlowStoreState>((set, get) => {
     connectExistingNodes: ({ fromNodeId, toNodeId, crud, condition = "", origin = "human" }) => {
       if (!ydoc || !yNodes || !yEdges) return null;
       const fromNode = yNodes.get(fromNodeId);
-      if (!fromNode) return null;
-      const stepNumber = allocateNextStepNumber(Array.from(yEdges.values()), fromNode.sectionPrefix);
+      const toNode = yNodes.get(toNodeId);
+      if (!fromNode || !toNode) return null;
+      const targetPrefix = toNode.sectionPrefix || fromNode.sectionPrefix;
+      const stepNumber = allocateNextStepNumber(Array.from(yEdges.values()), targetPrefix);
       const edge: FlowEdge = {
         id: uid("e"),
         sourceNodeId: fromNodeId,
         targetNodeId: toNodeId,
-        sectionPrefix: fromNode.sectionPrefix,
+        sectionPrefix: targetPrefix,
         stepNumber,
         crud,
         condition,
@@ -361,11 +637,21 @@ export const useFlowStore = create<FlowStoreState>((set, get) => {
     },
 
     updateNodeLabel: (nodeId, label, origin = "human") => {
+      get().updateNodeDetails(nodeId, { label }, origin);
+    },
+
+    updateNodeDetails: (nodeId, patch, origin = "human") => {
       if (!ydoc || !yNodes) return;
       const existing = yNodes.get(nodeId);
       if (!existing) return;
+      if (patch.sectionPrefix !== undefined && ySections) {
+        const hasSec = Array.from(ySections.values()).some((s) => s.prefix === patch.sectionPrefix);
+        if (!hasSec) {
+          get().upsertSection(patch.sectionPrefix, `Section ${patch.sectionPrefix}`, undefined, origin);
+        }
+      }
       ydoc.transact(() => {
-        yNodes!.set(nodeId, { ...existing, label });
+        yNodes!.set(nodeId, { ...existing, ...patch });
       }, origin);
     },
 
@@ -411,6 +697,17 @@ export const useFlowStore = create<FlowStoreState>((set, get) => {
       }, "human");
     },
 
+    confirmAllAiDrafts: () => {
+      if (!ydoc || !yNodes) return;
+      ydoc.transact(() => {
+        for (const [nid, node] of yNodes!.entries()) {
+          if (node.aiStatus === "draft") {
+            yNodes!.set(nid, { ...node, aiStatus: "confirmed" });
+          }
+        }
+      }, "human");
+    },
+
     rejectAiDraft: (nodeId) => {
       get().deleteNode(nodeId, "human");
     },
@@ -426,6 +723,23 @@ export const useFlowStore = create<FlowStoreState>((set, get) => {
         }
       }, origin);
       if (get().selectedNodeId === nodeId) set({ selectedNodeId: null });
+    },
+
+    updateEdgeDetails: (edgeId, patch, origin = "human") => {
+      if (!ydoc || !yEdges) return;
+      const existing = yEdges.get(edgeId);
+      if (!existing) return;
+      ydoc.transact(() => {
+        yEdges!.set(edgeId, { ...existing, ...patch });
+      }, origin);
+    },
+
+    deleteEdge: (edgeId, origin = "human") => {
+      if (!ydoc || !yEdges) return;
+      ydoc.transact(() => {
+        yEdges!.delete(edgeId);
+      }, origin);
+      if (get().selectedEdgeId === edgeId) set({ selectedEdgeId: null });
     },
 
     runAutoLayout: async (respectPinned = false) => {
@@ -474,10 +788,16 @@ export const useFlowStore = create<FlowStoreState>((set, get) => {
 
     applyAiToolCalls: async (calls) => {
       const mutatedIds: string[] = [];
+      let needsLayout = false;
       for (const call of calls ?? []) {
-        const args = (call.arguments ?? {}) as Record<string, any>;
+        const args = (call.arguments ?? {}) as Record<string, unknown>;
         if (call.name === "upsert_section") {
-          const sec = get().upsertSection(Number(args.prefix), String(args.name), "ai-agent");
+          const sec = get().upsertSection(
+            Number(args.prefix),
+            String(args.name),
+            undefined,
+            "ai-agent"
+          );
           mutatedIds.push(sec.id);
         } else if (call.name === "add_workflow_step") {
           const { node, edge } = get().addWorkflowStep({
@@ -491,6 +811,7 @@ export const useFlowStore = create<FlowStoreState>((set, get) => {
             origin: "ai-agent",
           });
           mutatedIds.push(node.id, edge.id);
+          needsLayout = true;
         } else if (call.name === "insert_step_between") {
           const mid = get().insertStepBetween({
             edgeId: String(args.edge_id),
@@ -499,7 +820,10 @@ export const useFlowStore = create<FlowStoreState>((set, get) => {
             crudOut: (args.crud_out as CrudOperation) || "U",
             origin: "ai-agent",
           });
-          if (mid) mutatedIds.push(mid.id);
+          if (mid) {
+            mutatedIds.push(mid.id);
+            needsLayout = true;
+          }
         } else if (call.name === "connect_existing_nodes") {
           const edge = get().connectExistingNodes({
             fromNodeId: String(args.from_node_id),
@@ -508,20 +832,41 @@ export const useFlowStore = create<FlowStoreState>((set, get) => {
             condition: args.condition ? String(args.condition) : "",
             origin: "ai-agent",
           });
-          if (edge) mutatedIds.push(edge.id);
+          if (edge) {
+            mutatedIds.push(edge.id);
+            needsLayout = true;
+          }
         } else if (call.name === "set_friction_sticky") {
           get().setFrictionSticky({
             nodeId: String(args.node_id),
-            isSlow: args.is_slow_blue,
-            slowNote: args.slow_reason,
-            hasProblem: args.has_problem_red,
-            problemNote: args.problem_reason,
+            isSlow: typeof args.is_slow_blue === "boolean" ? args.is_slow_blue : undefined,
+            slowNote: args.slow_reason !== undefined ? String(args.slow_reason) : undefined,
+            hasProblem: typeof args.has_problem_red === "boolean" ? args.has_problem_red : undefined,
+            problemNote: args.problem_reason !== undefined ? String(args.problem_reason) : undefined,
             origin: "ai-agent",
           });
           mutatedIds.push(String(args.node_id));
+        } else if (call.name === "update_workflow_step") {
+          const patch: Partial<Pick<FlowNode, "label" | "notes" | "kind" | "sectionPrefix">> = {};
+          if (args.label !== undefined) patch.label = compressToFourWords(String(args.label));
+          if (args.spoken_notes !== undefined) patch.notes = String(args.spoken_notes);
+          if (args.kind !== undefined) patch.kind = args.kind as FlowNodeKind;
+          if (args.section_prefix !== undefined) patch.sectionPrefix = Number(args.section_prefix);
+          get().updateNodeDetails(String(args.node_id), patch, "ai-agent");
+          mutatedIds.push(String(args.node_id));
+        } else if (call.name === "update_edge") {
+          const edgePatch: Partial<Pick<FlowEdge, "crud" | "condition">> = {};
+          if (args.crud !== undefined) edgePatch.crud = args.crud as CrudOperation;
+          if (args.condition !== undefined) edgePatch.condition = String(args.condition);
+          get().updateEdgeDetails(String(args.edge_id), edgePatch, "ai-agent");
+          mutatedIds.push(String(args.edge_id));
+        } else if (call.name === "delete_workflow_step") {
+          get().deleteNode(String(args.node_id), "ai-agent");
+          mutatedIds.push(String(args.node_id));
+          needsLayout = true;
         }
       }
-      if (mutatedIds.length > 0) await get().runAutoLayout(true);
+      if (needsLayout) await get().runAutoLayout(true);
       return mutatedIds;
     },
 
@@ -555,6 +900,7 @@ export const useFlowStore = create<FlowStoreState>((set, get) => {
             project_id: state.projectId,
             transcript: userText,
             selected_node_id: state.selectedNodeId,
+            active_phase: state.activePhase,
             sections: state.sections,
             nodes: state.nodes,
             edges: state.edges,

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>FlowPulse uses your microphone for 100% local Apple Silicon MLX voice workflow mapping with live barge-in.</string>
+  <key>NSCameraUsageDescription</key>
+  <string>FlowPulse uses your camera to import physical sticky-note walls and whiteboards into Result Maps locally.</string>
+</dict>
+</plist>

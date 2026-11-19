@@ -1,18 +1,49 @@
 import React, { useState, useRef } from "react";
-import { Mic, MicOff, Send, Camera, Sparkles, GitBranch, CheckCircle2, Volume2, VolumeX } from "lucide-react";
+import {
+  Mic,
+  MicOff,
+  Send,
+  Camera,
+  Sparkles,
+  GitBranch,
+  CheckCircle2,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import { toBlob } from "html-to-image";
 import { useFlowStore } from "../store/useFlowStore";
 import { findOpenUnfinishedLeaves } from "../engine/crudEngine";
 import { useVoiceSession } from "../hooks/useVoiceSession";
+import { WORKSHOP_PHASES } from "../types/flow";
 
-const SPATIAL_KEYWORDS = ["right here", "this messy", "these two", "look at", "pointing", "bottom", "top", "cluster"];
+const SPATIAL_KEYWORDS = [
+  "right here",
+  "this messy",
+  "these two",
+  "look at",
+  "pointing",
+  "bottom",
+  "top",
+  "cluster",
+];
 
-export const FacilitatorSidebar: React.FC<{ canvasRef: React.RefObject<HTMLDivElement | null> }> = ({ canvasRef }) => {
+export const FacilitatorSidebar: React.FC<{
+  canvasRef: React.RefObject<HTMLDivElement | null>;
+}> = ({ canvasRef }) => {
   const [input, setInput] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const { voiceStatus, isMuted, voiceError, remoteAudioRef, toggleVoiceConnection, toggleMute } = useVoiceSession();
+  const {
+    voiceStatus,
+    isMuted,
+    voiceError,
+    remoteAudioRef,
+    toggleVoiceConnection,
+    toggleMute,
+  } = useVoiceSession();
 
+  const activePhase = useFlowStore((s) => s.activePhase);
+  const setActivePhase = useFlowStore((s) => s.setActivePhase);
   const chatHistory = useFlowStore((s) => s.chatHistory);
   const isAiThinking = useFlowStore((s) => s.isAiThinking);
   const sendFacilitatorTurn = useFlowStore((s) => s.sendFacilitatorTurn);
@@ -21,9 +52,16 @@ export const FacilitatorSidebar: React.FC<{ canvasRef: React.RefObject<HTMLDivEl
   const selectNode = useFlowStore((s) => s.selectNode);
 
   const openLeaves = findOpenUnfinishedLeaves(nodes, edges);
+  const currentPhaseInfo =
+    WORKSHOP_PHASES.find((p) => p.phase === activePhase) ?? WORKSHOP_PHASES[1];
 
   const captureCanvasIfDeictic = async (text: string): Promise<string | undefined> => {
-    if (!SPATIAL_KEYWORDS.some((kw) => text.toLowerCase().includes(kw)) || !canvasRef.current) return undefined;
+    if (
+      !SPATIAL_KEYWORDS.some((kw) => text.toLowerCase().includes(kw)) ||
+      !canvasRef.current
+    ) {
+      return undefined;
+    }
     try {
       const blob = await toBlob(canvasRef.current, { type: "image/webp", quality: 0.8 });
       if (!blob) return undefined;
@@ -51,7 +89,10 @@ export const FacilitatorSidebar: React.FC<{ canvasRef: React.RefObject<HTMLDivEl
     if (!file) return;
     const reader = new FileReader();
     reader.onloadend = async () => {
-      await sendFacilitatorTurn("Import physical wall stickies from this photo into sections and +5 CRUD steps.", String(reader.result));
+      await sendFacilitatorTurn(
+        "Import physical wall stickies from this photo into sections and +5 CRUD steps.",
+        String(reader.result)
+      );
     };
     reader.readAsDataURL(file);
   };
@@ -67,22 +108,41 @@ export const FacilitatorSidebar: React.FC<{ canvasRef: React.RefObject<HTMLDivEl
           <h2 className="text-sm font-bold tracking-wide text-slate-100">AI Facilitator</h2>
         </div>
         <div className="flex items-center gap-1.5">
-          <button onClick={() => fileInputRef.current?.click()} title="Import Physical Wall Stickies" className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            title="Import Physical Wall Stickies"
+            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300"
+          >
             <Camera className="w-4 h-4" />
           </button>
-          <input ref={fileInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleWallPhotoImport} />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={handleWallPhotoImport}
+          />
           {isLive && (
             <button
               onClick={toggleMute}
               title="Toggle Mute (Space)"
-              className={`p-1.5 rounded-lg ${isMuted ? "bg-amber-500/20 text-amber-300 border border-amber-500/40" : "bg-slate-800 text-emerald-300"}`}
+              className={`p-1.5 rounded-lg ${
+                isMuted
+                  ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                  : "bg-slate-800 text-emerald-300"
+              }`}
             >
               {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
             </button>
           )}
           <button
             onClick={toggleVoiceConnection}
-            title={isLive ? "Disconnect Live Voice (Press Space to Mute)" : "Start Full-Duplex MLX WebRTC Voice"}
+            title={
+              isLive
+                ? "Disconnect Live Voice (Press Space to Mute)"
+                : "Start Full-Duplex MLX WebRTC Voice"
+            }
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${
               isLive
                 ? isMuted
@@ -93,9 +153,41 @@ export const FacilitatorSidebar: React.FC<{ canvasRef: React.RefObject<HTMLDivEl
                 : "bg-slate-800 text-slate-400 hover:text-slate-200"
             }`}
           >
-            {isLive && !isMuted ? <Mic className="w-3.5 h-3.5 animate-pulse" /> : <MicOff className="w-3.5 h-3.5" />}
-            {voiceStatus === "connecting" ? "Connecting..." : isLive ? (isMuted ? "Muted (Space)" : "Live Mic") : "Start Voice"}
+            {isLive && !isMuted ? (
+              <Mic className="w-3.5 h-3.5 animate-pulse" />
+            ) : (
+              <MicOff className="w-3.5 h-3.5" />
+            )}
+            {voiceStatus === "connecting"
+              ? "Connecting..."
+              : isLive
+              ? isMuted
+                ? "Muted (Space)"
+                : "Live Mic"
+              : "Start Voice"}
           </button>
+        </div>
+      </div>
+
+      <div className="px-3 py-2 bg-slate-950/80 border-b border-slate-800 space-y-1.5">
+        <div className="grid grid-cols-4 gap-1">
+          {WORKSHOP_PHASES.map((p) => (
+            <button
+              key={p.phase}
+              onClick={() => setActivePhase(p.phase)}
+              className={`py-1 rounded text-[10px] font-bold transition ${
+                activePhase === p.phase
+                  ? "bg-teal-500 text-slate-950"
+                  : "bg-slate-800 text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              P{p.phase}
+            </button>
+          ))}
+        </div>
+        <div className="text-[11px] text-slate-400 leading-tight">
+          <strong className="text-slate-200">{currentPhaseInfo.title}:</strong>{" "}
+          {currentPhaseInfo.hint}
         </div>
       </div>
 
@@ -107,15 +199,23 @@ export const FacilitatorSidebar: React.FC<{ canvasRef: React.RefObject<HTMLDivEl
 
       <div className="px-3.5 py-2.5 bg-slate-950/60 border-b border-slate-800">
         <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400 mb-1.5">
-          <span className="flex items-center gap-1"><GitBranch className="w-3.5 h-3.5 text-amber-400" /> Open Unfinished Branches</span>
+          <span className="flex items-center gap-1">
+            <GitBranch className="w-3.5 h-3.5 text-amber-400" /> Open Unfinished Branches
+          </span>
           <span className="px-1.5 rounded bg-slate-800 text-slate-200">{openLeaves.length}</span>
         </div>
         {openLeaves.length === 0 ? (
-          <div className="flex items-center gap-1.5 text-xs text-emerald-400"><CheckCircle2 className="w-3.5 h-3.5" /> Every branch resolves cleanly!</div>
+          <div className="flex items-center gap-1.5 text-xs text-emerald-400">
+            <CheckCircle2 className="w-3.5 h-3.5" /> Every branch resolves cleanly!
+          </div>
         ) : (
           <div className="flex flex-wrap gap-1">
             {openLeaves.map((leaf) => (
-              <button key={leaf.id} onClick={() => selectNode(leaf.id)} className="text-[11px] px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 truncate max-w-40">
+              <button
+                key={leaf.id}
+                onClick={() => selectNode(leaf.id)}
+                className="text-[11px] px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 truncate max-w-40"
+              >
                 {leaf.label}
               </button>
             ))}
@@ -125,12 +225,25 @@ export const FacilitatorSidebar: React.FC<{ canvasRef: React.RefObject<HTMLDivEl
 
       <div className="flex-1 overflow-y-auto p-3.5 space-y-3">
         {chatHistory.map((turn) => (
-          <div key={turn.id} className={`rounded-xl p-2.5 text-xs leading-relaxed ${turn.speaker === "ai" ? "bg-slate-800/90 text-slate-200 border border-slate-700/70" : "bg-teal-600/20 text-teal-100 border border-teal-500/30 ml-6"}`}>
-            <div className="font-bold text-[10px] uppercase tracking-wider opacity-60 mb-1">{turn.speaker === "ai" ? "FlowPulse AI" : "You"}</div>
+          <div
+            key={turn.id}
+            className={`rounded-xl p-2.5 text-xs leading-relaxed ${
+              turn.speaker === "ai"
+                ? "bg-slate-800/90 text-slate-200 border border-slate-700/70"
+                : "bg-teal-600/20 text-teal-100 border border-teal-500/30 ml-6"
+            }`}
+          >
+            <div className="font-bold text-[10px] uppercase tracking-wider opacity-60 mb-1">
+              {turn.speaker === "ai" ? "FlowPulse AI" : "You"}
+            </div>
             <div>{turn.transcript}</div>
           </div>
         ))}
-        {isAiThinking && <div className="text-xs text-teal-400 animate-pulse px-2">Facilitator updating stickies...</div>}
+        {isAiThinking && (
+          <div className="text-xs text-teal-400 animate-pulse px-2">
+            Facilitator updating stickies...
+          </div>
+        )}
       </div>
 
       <form onSubmit={handleSubmit} className="p-3 border-t border-slate-800 flex gap-2">
@@ -141,7 +254,11 @@ export const FacilitatorSidebar: React.FC<{ canvasRef: React.RefObject<HTMLDivEl
           placeholder="Describe next step, branch, or bottleneck..."
           className="flex-1 rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-teal-400"
         />
-        <button type="submit" disabled={isAiThinking} className="rounded-lg bg-teal-500 hover:bg-teal-400 disabled:opacity-50 text-slate-950 font-bold px-3 py-2">
+        <button
+          type="submit"
+          disabled={isAiThinking}
+          className="rounded-lg bg-teal-500 hover:bg-teal-400 disabled:opacity-50 text-slate-950 font-bold px-3 py-2"
+        >
           <Send className="w-4 h-4" />
         </button>
       </form>

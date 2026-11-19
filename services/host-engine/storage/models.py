@@ -7,6 +7,8 @@ class Project(SQLModel, table=True):
     id: str = Field(primary_key=True)
     title: str = Field(default="Untitled Process")
     visual_mode: str = Field(default="sticky-workshop")
+    active_phase: int = Field(default=2)
+    board_json: str = Field(default="{}")
     yjs_state_blob: Optional[bytes] = Field(default=None)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

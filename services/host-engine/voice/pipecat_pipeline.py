@@ -3,7 +3,8 @@ Full-Duplex Local Voice Pipeline for FlowPulse (Apple Silicon Metal / MLX):
   SmallWebRTCTransport (16kHz in / 24kHz out)
     -> SileroVADAnalyzer(stop_secs=0.2) + LocalSmartTurnAnalyzerV3 (thinking-pause aware, <120ms barge-in)
     -> ParakeetMLXSTTService (mlx-community/parakeet-tdt-0.6b-v3 on Metal)
-    -> OLLamaLLMService (qwen3.5:35b-a3b with think=False + FlowPulse atomic board tools)
+    -> OLLamaLLMService (qwen3.5:35b-a3b with live board context sync + 8 atomic board tools)
+    -> AssistantTranscriptTap (streams AI spoken text to UI sidebar live)
     -> MLXAudioTTSService (Sesame CSM-1B / Qwen3-TTS / Kokoro-bf16 on Metal)
     -> SmallWebRTCOutputTransport
 """
@@ -25,7 +26,6 @@ from voice.mlx_speech import CONFIG_PATH, DEFAULT_STT_REPO, resolve_active_tts_c
 
 MODELS_DIR = Path.home() / ".flowpulse" / "models"
 
-# Keep active WebRTC connections & background pipeline tasks alive
 _active_sessions: dict[str, dict[str, Any]] = {}
 
 
@@ -41,7 +41,8 @@ def check_local_voice_models() -> dict[str, Any]:
     return {
         "backend": "apple-mlx-metal",
         "models_dir": str(MODELS_DIR),
-        "mlx_ready": bool((saved_cfg.get("stt") or {}).get("ready")) and bool((saved_cfg.get("tts") or {}).get("ready")),
+        "mlx_ready": bool((saved_cfg.get("stt") or {}).get("ready"))
+        and bool((saved_cfg.get("tts") or {}).get("ready")),
         "stt_model": DEFAULT_STT_REPO,
         "tts_model": tts_cfg.get("repo_id"),
         "tts_kind": tts_cfg.get("kind"),
@@ -49,6 +50,27 @@ def check_local_voice_models() -> dict[str, Any]:
         "turn_analyzer": "LocalSmartTurnAnalyzerV3",
         "vad": "SileroVADAnalyzer(stop_secs=0.2)",
     }
+
+
+def update_voice_session_context(project_id: str, payload: dict[str, Any]) -> int:
+    """Refresh live board digest in all active WebRTC LLMContexts for `project_id`."""
+    digest = build_compact_graph_digest(
+        sections=payload.get("sections") or [],
+        nodes=payload.get("nodes") or [],
+        edges=payload.get("edges") or [],
+        selected_node_id=payload.get("selected_node_id"),
+        active_phase=int(payload.get("active_phase") or 2),
+    )
+    updated_system = f"{FACILITATOR_SYSTEM_PROMPT}\n\nLIVE_BOARD_CONTEXT:\n{digest}"
+    updated_count = 0
+    for session in _active_sessions.values():
+        if session.get("project_id") != project_id:
+            continue
+        ctx = session.get("context")
+        if ctx is not None and getattr(ctx, "messages", None):
+            ctx.messages[0]["content"] = updated_system
+            updated_count += 1
+    return updated_count
 
 
 def _build_pipecat_tools(
@@ -62,12 +84,18 @@ def _build_pipecat_tools(
     async def _handle_tool(params: FunctionCallParams) -> None:
         name = params.function_name
         args = dict(params.arguments or {})
-        if name in ("add_workflow_step", "insert_step_between") and "label" in args:
+        if (
+            name in ("add_workflow_step", "insert_step_between", "update_workflow_step")
+            and "label" in args
+            and args["label"]
+        ):
             args["label"] = compress_label_for_ai(str(args["label"]))
 
         logger.info(f"[FlowPulse Voice Tool] project={project_id} {name}({args})")
         await emit_event({"type": "tool_call", "call": {"name": name, "arguments": args}})
-        await params.result_callback({"status": "applied_to_board", "tool": name, "arguments": args})
+        await params.result_callback(
+            {"status": "applied_to_board", "tool": name, "arguments": args}
+        )
 
     schemas = []
     for raw in FLOWPULSE_TOOLS:
@@ -94,6 +122,7 @@ async def create_webrtc_voice_session(
         from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
         from pipecat.audio.vad.silero import SileroVADAnalyzer
         from pipecat.audio.vad.vad_analyzer import VADParams
+        from pipecat.frames.frames import LLMFullResponseEndFrame, TextFrame
         from pipecat.pipeline.pipeline import Pipeline
         from pipecat.pipeline.runner import PipelineRunner
         from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -102,6 +131,7 @@ async def create_webrtc_voice_session(
             LLMContextAggregatorPair,
             LLMUserAggregatorParams,
         )
+        from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
         from pipecat.services.ollama.llm import OLLamaLLMService
         from pipecat.transports.base_transport import TransportParams
         from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
@@ -121,11 +151,33 @@ async def create_webrtc_voice_session(
     nodes = sdp_offer.get("nodes") or []
     edges = sdp_offer.get("edges") or []
     selected_node_id = sdp_offer.get("selected_node_id")
+    active_phase = int(sdp_offer.get("active_phase") or 2)
 
     async def _noop_emit(_evt: dict[str, Any]) -> None:
         return None
 
     emitter = emit_event or _noop_emit
+
+    class AssistantTranscriptTap(FrameProcessor):
+        """Accumulates streamed LLM TextFrames and broadcasts full assistant turns to UI."""
+
+        def __init__(self):
+            super().__init__()
+            self._buf: list[str] = []
+
+        async def process_frame(self, frame, direction: FrameDirection):
+            await super().process_frame(frame, direction)
+            if direction == FrameDirection.DOWNSTREAM:
+                if isinstance(frame, TextFrame) and frame.text:
+                    self._buf.append(frame.text)
+                elif isinstance(frame, LLMFullResponseEndFrame) and self._buf:
+                    spoken = "".join(self._buf).strip()
+                    self._buf.clear()
+                    if spoken:
+                        asyncio.create_task(
+                            emitter({"type": "transcript", "speaker": "ai", "text": spoken})
+                        )
+            await self.push_frame(frame, direction)
 
     connection = SmallWebRTCConnection()
     await connection.initialize(sdp=sdp_offer["sdp"], type=sdp_offer["type"])
@@ -152,20 +204,34 @@ async def create_webrtc_voice_session(
     )
 
     active_model = os.environ.get("FLOWPULSE_OLLAMA_MODEL", OLLAMA_MODEL)
-    llm = OLLamaLLMService(
-        model=active_model,
-        base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
-    )
+    llm_kwargs: dict[str, Any] = {
+        "model": active_model,
+        "base_url": os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
+    }
+    try:
+        llm = OLLamaLLMService(
+            **llm_kwargs,
+            extra={"think": False, "keep_alive": -1},
+        )
+    except TypeError:
+        llm = OLLamaLLMService(**llm_kwargs)
+
     tools_schema, tool_handler = _build_pipecat_tools(project_id, emitter)
     for tool in tools_schema.standard_tools:
         llm.register_function(tool.name, tool_handler)
 
-    board_digest = build_compact_graph_digest(sections, nodes, edges, selected_node_id)
+    board_digest = build_compact_graph_digest(
+        sections,
+        nodes,
+        edges,
+        selected_node_id=selected_node_id,
+        active_phase=active_phase,
+    )
     context = LLMContext(
         messages=[
             {
                 "role": "system",
-                "content": f"{FACILITATOR_SYSTEM_PROMPT}\n\nINITIAL_BOARD_CONTEXT:\n{board_digest}",
+                "content": f"{FACILITATOR_SYSTEM_PROMPT}\n\nLIVE_BOARD_CONTEXT:\n{board_digest}",
             }
         ],
         tools=tools_schema,
@@ -180,6 +246,7 @@ async def create_webrtc_voice_session(
         ),
     )
     context_aggregator = LLMContextAggregatorPair(context, user_params=user_params)
+    assistant_tap = AssistantTranscriptTap()
 
     pipeline = Pipeline(
         [
@@ -187,6 +254,7 @@ async def create_webrtc_voice_session(
             stt,
             context_aggregator.user(),
             llm,
+            assistant_tap,
             tts,
             transport.output(),
             context_aggregator.assistant(),
@@ -210,7 +278,13 @@ async def create_webrtc_voice_session(
 
     runner = PipelineRunner(handle_sigint=False)
     bg_task = asyncio.create_task(runner.run(task))
-    _active_sessions[pc_id] = {"connection": connection, "task": task, "runner_task": bg_task}
+    _active_sessions[pc_id] = {
+        "project_id": project_id,
+        "context": context,
+        "connection": connection,
+        "task": task,
+        "runner_task": bg_task,
+    }
 
     return {
         "status": "ok",

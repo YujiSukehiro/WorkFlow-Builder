@@ -14,6 +14,7 @@ export function useVoiceSession() {
   const voiceWsRef = useRef<WebSocket | null>(null);
 
   const projectId = useFlowStore((s) => s.projectId);
+  const activePhase = useFlowStore((s) => s.activePhase);
   const sections = useFlowStore((s) => s.sections);
   const nodes = useFlowStore((s) => s.nodes);
   const edges = useFlowStore((s) => s.edges);
@@ -103,6 +104,7 @@ export function useVoiceSession() {
           sdp: localDesc?.sdp,
           type: localDesc?.type,
           project_id: projectId,
+          active_phase: activePhase,
           selected_node_id: selectedNodeId,
           sections,
           nodes,
@@ -124,7 +126,33 @@ export function useVoiceSession() {
       setVoiceStatus("error");
       setVoiceError(err instanceof Error ? err.message : "Could not start Live Mic");
     }
-  }, [projectId, selectedNodeId, sections, nodes, edges, applyAiToolCalls, appendChatTurn, disconnectVoice]);
+  }, [
+    projectId,
+    activePhase,
+    selectedNodeId,
+    sections,
+    nodes,
+    edges,
+    applyAiToolCalls,
+    appendChatTurn,
+    disconnectVoice,
+  ]);
+
+  useEffect(() => {
+    if (voiceStatus !== "live") return;
+    const ws = voiceWsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(
+      JSON.stringify({
+        type: "context_sync",
+        active_phase: activePhase,
+        selected_node_id: selectedNodeId,
+        sections,
+        nodes,
+        edges,
+      })
+    );
+  }, [voiceStatus, activePhase, selectedNodeId, sections, nodes, edges]);
 
   const toggleVoiceConnection = useCallback(() => {
     if (voiceStatus === "live" || voiceStatus === "connecting") {
@@ -146,7 +174,6 @@ export function useVoiceSession() {
     });
   }, []);
 
-  // Space push-to-mute hotkey when Live Mic is active
   useEffect(() => {
     if (voiceStatus !== "live") return;
     const onKeyDown = (e: KeyboardEvent) => {

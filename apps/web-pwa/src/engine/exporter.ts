@@ -1,4 +1,12 @@
-import { FlowEdge, FlowNode, FlowSection } from "../types/flow";
+import {
+  CanvasVisualMode,
+  FlowEdge,
+  FlowNode,
+  FlowSection,
+  ProjectBundle,
+  WorkshopPhase,
+} from "../types/flow";
+import { getStickyColorForPrefix } from "./crudEngine";
 
 function escXml(s: string): string {
   return s
@@ -99,9 +107,7 @@ export function compileResultMapSvg(
     })
     .join("\n");
 
-  const secLegend = sections
-    .map((s) => `${s.prefix}s: ${s.name}`)
-    .join("   •   ");
+  const secLegend = sections.map((s) => `${s.prefix}s: ${s.name}`).join("   •   ");
 
   return [
     `<?xml version="1.0" encoding="UTF-8"?>`,
@@ -178,6 +184,125 @@ export function compileProcessSpecMarkdown(
     );
   }
   return lines.join("\n");
+}
+
+export function openPrintableResultMapPdf(
+  title: string,
+  sections: FlowSection[],
+  nodes: FlowNode[],
+  edges: FlowEdge[]
+): void {
+  const svgMarkup = compileResultMapSvg(title, sections, nodes, edges).replace(
+    /^<\?xml[^>]*\?>\s*/,
+    ""
+  );
+  const nodeMap = new Map(nodes.map((n) => [n.id, n]));
+  const frictionRows = nodes
+    .filter((n) => n.isSlow || n.hasProblem)
+    .map(
+      (n) =>
+        `<tr>
+          <td>${n.hasProblem ? '<span class="badge red">RED · PROBLEM</span> ' : ""}${
+            n.isSlow ? '<span class="badge blue">BLUE · SLOW</span>' : ""
+          }</td>
+          <td>${n.sectionPrefix}s</td>
+          <td><strong>${escXml(n.label)}</strong></td>
+          <td>${escXml([n.problemNote, n.slowNote, n.notes].filter(Boolean).join(" | ") || "—")}</td>
+        </tr>`
+    )
+    .join("");
+
+  const crudRows = [...edges]
+    .sort((a, b) => a.stepNumber - b.stepNumber)
+    .map((e) => {
+      const src = nodeMap.get(e.sourceNodeId)?.label ?? e.sourceNodeId;
+      const dst = nodeMap.get(e.targetNodeId)?.label ?? e.targetNodeId;
+      return `<tr>
+        <td><strong>${e.stepNumber}</strong></td>
+        <td><code>${escXml(e.crud)}</code></td>
+        <td>${e.sectionPrefix}s</td>
+        <td>${escXml(src)}</td>
+        <td>${escXml(dst)}</td>
+        <td>${escXml(e.condition || "—")}</td>
+      </tr>`;
+    })
+    .join("");
+
+  const html = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Result Map PDF — ${escXml(title)}</title>
+  <style>
+    @page { size: landscape; margin: 10mm; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #0f172a; margin: 0; padding: 16px; background: #fff; }
+    .poster-wrap { width: 100%; border-radius: 12px; overflow: hidden; border: 1px solid #cbd5e1; page-break-after: always; }
+    .poster-wrap svg { width: 100%; height: auto; display: block; }
+    h2 { font-size: 16px; margin: 16px 0 8px; border-bottom: 2px solid #0f172a; padding-bottom: 4px; }
+    table { width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 18px; }
+    th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; }
+    th { background: #f1f5f9; font-weight: 700; }
+    .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 9px; font-weight: 700; color: #fff; }
+    .red { background: #dc2626; }
+    .blue { background: #2563eb; }
+  </style>
+</head>
+<body>
+  <div class="poster-wrap">${svgMarkup}</div>
+  <h2>Prioritized Friction Backlog (Red &amp; Blue Stickies)</h2>
+  <table>
+    <thead><tr><th>Type</th><th>Section</th><th>Step</th><th>Root Cause &amp; Spoken Notes</th></tr></thead>
+    <tbody>${frictionRows || '<tr><td colspan="4">No friction stickies flagged.</td></tr>'}</tbody>
+  </table>
+  <h2>Complete +5 CRUD Data Dictionary</h2>
+  <table>
+    <thead><tr><th>Step #</th><th>CRUD</th><th>Section</th><th>From</th><th>To</th><th>Condition</th></tr></thead>
+    <tbody>${crudRows || '<tr><td colspan="6">No transitions defined.</td></tr>'}</tbody>
+  </table>
+  <script>window.onload = () => { setTimeout(() => window.print(), 250); };</script>
+</body>
+</html>`;
+
+  const win = window.open("", "_blank");
+  if (win) {
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+  }
+}
+
+export function parseProjectBundleJson(rawText: string): ProjectBundle {
+  const parsed = JSON.parse(rawText) as Record<string, unknown>;
+  if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) {
+    throw new Error("Invalid .flowpulse.json file: missing nodes or edges arrays.");
+  }
+
+  const sections: FlowSection[] = Array.isArray(parsed.sections)
+    ? (parsed.sections as FlowSection[]).map((s) => ({
+        id: String(s.id || `sec_${s.prefix}`),
+        prefix: Number(s.prefix ?? 100),
+        name: String(s.name || `Section ${s.prefix}`),
+        stickyColorHex: String(s.stickyColorHex || getStickyColorForPrefix(Number(s.prefix ?? 100))),
+        sortOrder: Number(s.sortOrder ?? s.prefix ?? 100),
+      }))
+    : [{ id: "sec_0", prefix: 0, name: "Trigger", stickyColorHex: "#86efac", sortOrder: 0 }];
+
+  const visualMode: CanvasVisualMode =
+    parsed.visualMode === "result-map" ? "result-map" : "sticky-workshop";
+  const phaseNum = Number(parsed.activePhase ?? 2);
+  const activePhase: WorkshopPhase =
+    phaseNum === 1 || phaseNum === 2 || phaseNum === 3 || phaseNum === 4 ? phaseNum : 2;
+
+  return {
+    projectId: parsed.projectId ? String(parsed.projectId) : undefined,
+    projectTitle: String(parsed.projectTitle || parsed.title || "Imported Workflow"),
+    visualMode,
+    activePhase,
+    exportedAt: String(parsed.exportedAt || new Date().toISOString()),
+    sections,
+    nodes: parsed.nodes as FlowNode[],
+    edges: parsed.edges as FlowEdge[],
+  };
 }
 
 export function triggerTextDownload(filename: string, content: string, mime = "text/markdown") {

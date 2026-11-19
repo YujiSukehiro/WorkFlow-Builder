@@ -11,7 +11,7 @@
 ### Phase 2: Local Backend, Yjs Co-Editing & `qwen3.5:35b-a3b` Tool-Calling
 - [x] `services/host-engine` with Python 3.12, FastAPI, SQLModel (SQLite), and WebSocket Yjs relay.
 - [x] Separate `"human"` (`Cmd+Z`) and `"ai-agent"` (`Cmd+Shift+Z`) `Y.UndoManager` stacks.
-- [x] Local Ollama `qwen3.5:35b-a3b` MoE integration with `think=False`, `keep_alive=-1`, and 5 atomic graph tools.
+- [x] Local Ollama `qwen3.5:35b-a3b` MoE integration with `think=False`, `keep_alive=-1`, and atomic graph tools.
 
 ### Phase 3: Full-Duplex Apple Metal MLX Voice & Barge-In Pipeline
 - [x] `scripts/setup_models.py` caching & benchmarking `parakeet-mlx` (`parakeet-tdt-0.6b-v3`) and `mlx-audio` (`Qwen3-TTS-0.6B-bf16` / `CSM-1B` / `Kokoro-82M-bf16`).
@@ -23,9 +23,21 @@
 - [x] **Import Physical Wall Stickies** camera input triggering `qwen3.5:35b-a3b` (`think=True`) vision extraction.
 
 ### Phase 5: Result Map Export Compiler & macOS `.app` / `.dmg` Bundle
-- [x] Result Map vector poster `.svg` export + `PROCESS_SPEC.md` report compiler (Executive Summary, Red/Blue friction table, `+5 CRUD` data dictionary) + `.flowpulse.json` export.
+- [x] Result Map vector poster `.svg` export + `PROCESS_SPEC.md` report compiler + `.flowpulse.json` export.
 - [x] LAN/Tailscale QR-code mobile pairing modal + iOS/macOS PWA manifest icons (`public/`).
 - [x] Tauri v2 macOS (`aarch64-apple-darwin`) Rust shell (`Cargo.toml`, sidecar lifecycle manager in `src/lib.rs`, `.icns` bundle icons, and `scripts/build_sidecar.py`).
+
+### Phase 6: Multi-Project SQLite Persistence, 8-Tool Co-Editing & Live Voice Context Sync
+- [x] Full SQLite `Project` CRUD endpoints (`GET/PUT/DELETE /api/projects`) with safe additive column migration and `.flowpulse.json` bundle import (`ProjectSwitcherModal`).
+- [x] Expanded AI tool suite (`update_workflow_step`, `update_edge`, `delete_workflow_step`) + `[edge_id=...]` digest visibility + rolling 6-turn memory.
+- [x] Live WebRTC `context_sync` updates + `AssistantTranscriptTap` streaming spoken AI turns into the sidebar chat log.
+- [x] Automatic static PWA hosting on `:8420` when `apps/web-pwa/dist` is built so Tailscale HTTPS works with zero extra proxy setup.
+
+### Phase 7: 4-Stage Workshop Phase Selector, Inspector Drawer, PDF Poster & macOS TCC Hardening
+- [x] Interactive `P1–P4` Workshop Phase selector (`FacilitatorSidebar`) wired into LLM system context and Phase 4 sign-off readiness audits (`auditBoardHealth`).
+- [x] Non-blocking `InspectorDrawer` for sticky labels, SOP notes, node kinds, `100s` section CRUD, `+5` edge CRUD/guard editing, and 1-click AI draft confirmation.
+- [x] Landscape printable Result Map `.pdf` poster + friction/CRUD ledger generator (`openPrintableResultMapPdf`).
+- [x] macOS TCC microphone/camera usage descriptions (`src-tauri/Info.plist`), PyInstaller MLX/Pipecat hidden-import collection, and `scripts/collect_m5_diagnostics.py`.
 
 ---
 
@@ -34,48 +46,19 @@
 iOS Safari and macOS/iPadOS browsers block `navigator.mediaDevices.getUserMedia` on plain `http://192.168.x.x` LAN addresses—requiring `localhost` or valid `HTTPS`.
 
 ### Option A: Tailscale HTTPS (Recommended — Zero Certificate Hassle)
-1. Install Tailscale (`brew install --cask tailscale`) on your Mac and iPhone/iPad.
+1. Build the frontend once (`cd apps/web-pwa && npm run build`) so FastAPI serves the compiled SPA directly on `:8420`.
 2. Run on your Mac:
    ~~~bash
    tailscale serve --bg https / http://127.0.0.1:8420
    ~~~
 3. Scan the QR code inside FlowPulse on your iPhone -> **Share -> Add to Home Screen** -> full native PWA with WebRTC microphone access.
 
-### Option B: 100% Offline LAN with `mkcert`
-1. Install `mkcert` (`brew install mkcert`) and run `mkcert -install` on your Mac, then generate `lan-cert.pem` + `lan-key.pem` for your `.local` hostname and LAN IP.
-2. AirDrop `rootCA.pem` onto your iPhone/iPad (Settings -> General -> VPN & Device Management -> Certificate Trust Settings).
-3. Pass `--ssl-keyfile lan-key.pem --ssl-certfile lan-cert.pem` to `uvicorn`.
-
 ---
 
-## 3. macOS Apple Silicon Quickstart Commands
+## 3. Generating the M5 Diagnostic Handoff File (For Phase 8+ Tuning)
 
 ~~~bash
-# One-command full setup (Ollama qwen3.5:35b-a3b + Python 3.12 uv + Metal MLX voice models + PWA build)
-./scripts/setup_mac.sh
-
-# Start Host Engine (pins qwen3.5:35b-a3b in 64 GB Unified Memory with Flash Attention)
 cd services/host-engine
-OLLAMA_FLASH_ATTENTION=1 OLLAMA_KEEP_ALIVE=-1 uv run uvicorn main:app --host 0.0.0.0 --port 8420 --reload
-
-# Start Frontend PWA (in a second terminal)
-cd apps/web-pwa
-npm run dev
+uv run python ../../scripts/collect_m5_diagnostics.py
+# Outputs ./flowpulse_m5_handoff.json at the repository root
 ~~~
-
----
-
-## 4. Building the Native macOS `.app` & `.dmg`
-
-~~~bash
-# 1. Freeze Python FastAPI + Pipecat + MLX engine into an arm64 Tauri sidecar
-python3 scripts/build_sidecar.py
-
-# 2. Compile Tauri v2 macOS application (.app) and disk image (.dmg)
-cd apps/desktop-shell
-npm run tauri build
-~~~
-
-Output bundle locations:
-- `apps/desktop-shell/src-tauri/target/release/bundle/macos/FlowPulse.app`
-- `apps/desktop-shell/src-tauri/target/release/bundle/dmg/FlowPulse_0.1.0_aarch64.dmg`

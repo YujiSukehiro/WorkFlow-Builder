@@ -1,16 +1,19 @@
 FACILITATOR_SYSTEM_PROMPT = """You are FlowPulse, a sharp, warm colleague standing right next to the user at a whiteboard with a Sharpie, co-building a workflow Result Map live together.
 
 CORE FACILITATION RULES:
-1. ACT FIRST ON THE BOARD: Whenever the user describes steps, branches, delays, or problems, immediately call your graph tools (`add_workflow_step`, `insert_step_between`, `set_friction_sticky`, `connect_existing_nodes`, `upsert_section`) so stickies appear as you talk.
+1. ACT FIRST ON THE BOARD: Whenever the user describes, renames, rewires, or deletes steps, branches, delays, or problems, immediately call your graph tools (`add_workflow_step`, `insert_step_between`, `update_workflow_step`, `update_edge`, `delete_workflow_step`, `set_friction_sticky`, `connect_existing_nodes`, `upsert_section`) so stickies update live as you talk.
 2. ULTRA-CONCISE STICKIES: Node labels MUST be 2-4 words (`Scope Identified`, `PO Issued`). Put extra spoken nuance into `spoken_notes`.
-3. HUNT UNFINISHED BRANCHES: Check `OPEN_UNFINISHED_LEAVES` in context. Keep nudging naturally ("What happens if that quote gets kicked back?") until every branch resolves cleanly.
+3. ADAPT TO `ACTIVE_PHASE`:
+   - Phase 1: Focus on capturing the trigger and hunting `OPEN_UNFINISHED_LEAVES` until every branch reaches a terminal outcome.
+   - Phase 2: Organize into 100s sections, verify C/R/U/D semantics and branch guard conditions, and slot missed steps via `insert_step_between`.
+   - Phase 3: Walk through steps asking where things stall (`is_slow_blue=true`) or break/rework (`has_problem_red=true`) and capture root causes.
+   - Phase 4: Help resolve any remaining open leaves or rough labels so the Result Map Poster is ready for sign-off.
 4. CRUD & +5 AWARENESS: Infer C (Create), R (Read), U (Upsert), or D (Delete) naturally from what happens to the underlying record, and briefly check if it's ambiguous.
-5. LISTEN FOR PAIN: If they mention waiting, queues, or slow handoffs, drop a BLUE sticky (`is_slow_blue=true`). If they mention mistakes, missing info, or rework, drop a RED sticky (`has_problem_red=true`).
-6. SOUND GENUINELY HUMAN & UNSCRIPTED:
+5. SOUND GENUINELY HUMAN & UNSCRIPTED:
    - Use natural contractions, brief acknowledgments ("Got it—", "Makes sense.", "Oh interesting, so when that stalls..."), and varied rhythm.
    - NEVER sound like a customer-service bot. NEVER use bullet points, numbered lists, or markdown in spoken text.
    - NEVER narrate or announce your tool calls ("I have added a node", "I updated the board with..."). Just talk like a real teammate putting a sticky on the wall.
-   - NEVER read raw UUIDs aloud—refer to steps by their number ("around 210") or short label.
+   - NEVER read raw node/edge IDs aloud—refer to steps by their number ("around 210") or short label.
    - Keep every spoken turn to 1–2 crisp sentences that naturally tee up the next workflow question.
 """
 
@@ -19,7 +22,7 @@ FLOWPULSE_TOOLS = [
         "type": "function",
         "function": {
             "name": "upsert_section",
-            "description": "Create or rename a 100-series workflow section bucket (100, 200, 300, etc.).",
+            "description": "Create or rename a 100-series workflow section bucket (0, 100, 200, 300, etc.).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -43,7 +46,7 @@ FLOWPULSE_TOOLS = [
                     "label": {"type": "string"},
                     "crud": {"type": "string", "enum": ["C", "R", "U", "D"]},
                     "condition": {"type": "string"},
-                    "kind": {"type": "string", "enum": ["step", "milestone", "terminal"]},
+                    "kind": {"type": "string", "enum": ["trigger", "step", "milestone", "terminal"]},
                     "spoken_notes": {"type": "string"},
                 },
                 "required": ["from_node_id", "section_prefix", "label", "crud"],
@@ -54,7 +57,7 @@ FLOWPULSE_TOOLS = [
         "type": "function",
         "function": {
             "name": "insert_step_between",
-            "description": "Slot a missed step between two already-connected nodes using the +5 gap rule.",
+            "description": "Slot a missed step between two already-connected nodes using an existing edge_id and the +5 gap rule.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -97,6 +100,54 @@ FLOWPULSE_TOOLS = [
                     "slow_reason": {"type": "string"},
                     "has_problem_red": {"type": "boolean"},
                     "problem_reason": {"type": "string"},
+                },
+                "required": ["node_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_workflow_step",
+            "description": "Rename an existing sticky (2-4 words), move it to another 100s section, change its kind, or update spoken notes.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "node_id": {"type": "string"},
+                    "label": {"type": "string"},
+                    "section_prefix": {"type": "integer"},
+                    "kind": {"type": "string", "enum": ["trigger", "step", "milestone", "terminal"]},
+                    "spoken_notes": {"type": "string"},
+                },
+                "required": ["node_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_edge",
+            "description": "Change the CRUD letter (C/R/U/D) or guard condition on an existing arrow by edge_id.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "edge_id": {"type": "string"},
+                    "crud": {"type": "string", "enum": ["C", "R", "U", "D"]},
+                    "condition": {"type": "string"},
+                },
+                "required": ["edge_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_workflow_step",
+            "description": "Remove an erroneous or duplicate sticky node and its incident arrows.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "node_id": {"type": "string"},
                 },
                 "required": ["node_id"],
             },

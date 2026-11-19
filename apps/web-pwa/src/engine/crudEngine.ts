@@ -1,4 +1,11 @@
-import { FlowEdge, FlowNode, FlowSection } from "../types/flow";
+import {
+  BoardHealthAudit,
+  FlowEdge,
+  FlowNode,
+  FlowSection,
+  WORKSHOP_PHASES,
+  WorkshopPhase,
+} from "../types/flow";
 
 const FILLER_WORDS = new Set(["the", "a", "an", "is", "was", "are", "were", "be", "been", "being"]);
 
@@ -120,15 +127,46 @@ export function findOpenUnfinishedLeaves(nodes: FlowNode[], edges: FlowEdge[]): 
   return nodes.filter((n) => n.kind !== "terminal" && !sources.has(n.id));
 }
 
+export function auditBoardHealth(nodes: FlowNode[], edges: FlowEdge[]): BoardHealthAudit {
+  const openLeafIds = findOpenUnfinishedLeaves(nodes, edges).map((n) => n.id);
+  const draftNodeIds = nodes.filter((n) => n.aiStatus === "draft").map((n) => n.id);
+  const verboseNodeIds = nodes
+    .filter((n) => validateConciseLabel(n.label).needsCompression)
+    .map((n) => n.id);
+  const nonMultipleOfFiveEdgeIds = edges
+    .filter((e) => e.stepNumber % 5 !== 0)
+    .map((e) => e.id);
+  const hasTrigger = nodes.some((n) => n.kind === "trigger");
+  const hasTerminal = nodes.some((n) => n.kind === "terminal");
+
+  return {
+    openLeafIds,
+    draftNodeIds,
+    verboseNodeIds,
+    nonMultipleOfFiveEdgeIds,
+    hasTrigger,
+    hasTerminal,
+    readyForSignoff:
+      openLeafIds.length === 0 &&
+      draftNodeIds.length === 0 &&
+      verboseNodeIds.length === 0 &&
+      nonMultipleOfFiveEdgeIds.length === 0 &&
+      hasTrigger &&
+      hasTerminal,
+  };
+}
+
 export function buildCompactGraphDigest(
   sections: FlowSection[],
   nodes: FlowNode[],
   edges: FlowEdge[],
-  selectedNodeId: string | null
+  selectedNodeId: string | null,
+  activePhase: WorkshopPhase = 2
 ): string {
   const nodeMap = new Map(nodes.map((n) => [n.id, n]));
   const selected = selectedNodeId ? nodeMap.get(selectedNodeId) : undefined;
   const openLeaves = findOpenUnfinishedLeaves(nodes, edges);
+  const phaseInfo = WORKSHOP_PHASES.find((p) => p.phase === activePhase) ?? WORKSHOP_PHASES[1];
   const secSummary = [...sections]
     .sort((a, b) => a.prefix - b.prefix)
     .map((s) => `${s.prefix}:${s.name}`)
@@ -143,11 +181,12 @@ export function buildCompactGraphDigest(
       if (target?.isSlow) flags.push("BLUE_SLOW");
       if (target?.hasProblem) flags.push("RED_PROBLEM");
       const flagStr = flags.length ? ` [${flags.join(",")}]` : "";
-      return `- ${e.sourceNodeId} --[${e.stepNumber} ${e.crud}${cond}]--> ${e.targetNodeId} ("${target?.label ?? "?"}")${flagStr}`;
+      return `- [edge_id=${e.id}] ${e.sourceNodeId} --[${e.stepNumber} ${e.crud}${cond}]--> ${e.targetNodeId} ("${target?.label ?? "?"}")${flagStr}`;
     })
     .join("\n");
 
   return [
+    `ACTIVE_PHASE: ${phaseInfo.phase} (${phaseInfo.title})`,
     `USER_SELECTED_NODE: ${selected ? `${selected.id} ("${selected.label}" in ${selected.sectionPrefix}s)` : "None"}`,
     `OPEN_UNFINISHED_LEAVES: [${openLeaves.map((n) => `${n.id}:"${n.label}"`).join(", ")}]`,
     `SECTIONS: ${secSummary}`,
